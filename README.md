@@ -5,27 +5,35 @@ Nexora is a project management application inspired by Jira and ClickUp.
 
 ## Project Overview
 
-The goal of Nexora is to help teams manage projects, organize tasks, track progress, and collaborate efficiently.
+Nexora helps teams manage projects, organize tasks, track progress, and collaborate efficiently.
 
-## Planned Technology Stack
+## Technology Stack
 
 - Next.js
 - TypeScript
+- Tailwind CSS
 - PostgreSQL
 - Docker
 
-## Project Status
+## Development Setup
 
-Currently in the foundation and setup phase.
+Install dependencies:
+
+npm install
+
+Start development server:
+
+npm run dev
+
+Open http://localhost:3000 in your browser.
 
 ## Git Workflow
 
-- `main`: Stable branch.
-- `feature/*`: New features and tasks.
-- `fix/*`: Bug fixes.
+- main: Stable branch.
+- feature/*: New features and tasks.
+- fix/*: Bug fixes.
 - Changes should be reviewed through Pull Requests before merging.
 
-## Getting Started
+## Project Status
 
-Setup instructions will be added as the project development progresses.
-
+Phase 1 - Repository and Application Foundation.
