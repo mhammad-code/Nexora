@@ -11,9 +11,108 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
 model User {
+  id                   String            @id @default(cuid())
+  name                 String
+  email                String            @unique
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  workspaceMemberships WorkspaceMember[]
+  projectsCreated      Project[]
+  projectMemberships   ProjectMember[]
+  tasksCreated         Task[]            @relation("TaskCreator")
+  tasksAssigned        Task[]            @relation("TaskAssignee")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Workspace {
+  id          String            @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  members     WorkspaceMember[]
+  projects    Project[]
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(MEMBER)
+  joinedAt    DateTime      @default(now())
+
+  user      User      @relation(fields: [userId], references: [id])
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([userId, workspaceId])
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  workspaceId String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id])
+  createdBy User            @relation(fields: [createdById], references: [id])
+  members   ProjectMember[]
+  tasks     Task[]
+
+  @@unique([workspaceId, name])
+}
+
+model ProjectMember {
   id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
+  userId    String
+  projectId String
+  joinedAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@unique([userId, projectId])
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?
+
+  projectId   String
+  createdById String
+  assigneeId  String?
+
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id])
+  createdBy User    @relation("TaskCreator", fields: [createdById], references: [id])
+  assignee  User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
 }
