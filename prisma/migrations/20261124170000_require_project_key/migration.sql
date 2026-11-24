@@ -1,0 +1,10 @@
+BEGIN;
+
+UPDATE "Project"
+SET "key" = 'NEX'
+WHERE "key" IS NULL;
+
+ALTER TABLE "Project"
+ALTER COLUMN "key" SET NOT NULL;
+
+COMMIT;
