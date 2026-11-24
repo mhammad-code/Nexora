@@ -68,6 +68,7 @@ async function main() {
       description: "Main development project",
       workspaceId: workspace.id,
       createdById: user.id,
+      key: "NEX",
     },
   });
 
