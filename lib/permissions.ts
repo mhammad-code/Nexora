@@ -83,3 +83,36 @@ export async function requireWorkspacePermission(
 
   return permission(role);
 }
+// Check whether a user belongs to a specific project
+export async function isProjectMember(
+  userId: string,
+  projectId: string
+): Promise<boolean> {
+  const membership = await prisma.projectMember.findUnique({
+    where: {
+      userId_projectId: {
+        userId,
+        projectId,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  return membership !== null;
+}
+// Check whether a user can access a project
+export function canAccessProject(
+  role: WorkspaceRoleType | null,
+  isMember: boolean
+): boolean {
+  return (
+    role !== null &&
+    (
+      role === WorkspaceRole.OWNER ||
+      role === WorkspaceRole.ADMIN ||
+      isMember
+    )
+  );
+}

@@ -7,7 +7,9 @@ import {
   getWorkspaceRole,
   canCreateProjects,
 } from "@/lib/permissions";
+import { WorkspaceRole } from "@/lib/generated/prisma/enums";
 
+// POST: Create a new project
 export async function POST(request: Request) {
   try {
     // 1. Verify the user's session
@@ -84,7 +86,10 @@ export async function POST(request: Request) {
       error.code === "P2002"
     ) {
       return NextResponse.json(
-        { message: "A project with this name or key already exists in this workspace." },
+        {
+          message:
+            "A project with this name or key already exists in this workspace.",
+        },
         { status: 409 }
       );
     }
@@ -96,6 +101,7 @@ export async function POST(request: Request) {
   }
 }
 
+// GET: Retrieve projects in a workspace
 export async function GET(request: Request) {
   try {
     // 1. Verify session
@@ -135,10 +141,25 @@ export async function GET(request: Request) {
       );
     }
 
-    // 4. Retrieve projects
+    // 4. Retrieve only the projects the user can access
     const projects = await prisma.project.findMany({
       where: {
         workspaceId,
+
+        // OWNER and ADMIN can see all workspace projects.
+        // MEMBER can see only assigned projects.
+        ...(role === WorkspaceRole.OWNER ||
+        role === WorkspaceRole.ADMIN
+          ? {}
+          : {
+              members: {
+                some: {
+                  userId: session.user.id,
+                },
+              },
+            }),
+
+        // Optional project name/key search
         ...(search
           ? {
               OR: [
@@ -170,7 +191,9 @@ export async function GET(request: Request) {
       },
       { status: 200 }
     );
-  } catch {
+  } catch (error) {
+    console.error("Project listing error:", error);
+
     return NextResponse.json(
       { message: "Something went wrong while retrieving projects." },
       { status: 500 }
