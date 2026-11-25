@@ -6,8 +6,9 @@ import { prisma } from "@/lib/prisma";
 import {
   getWorkspaceRole,
   canManageWorkspace,
+  isProjectMember,
+  canAccessProject,
 } from "@/lib/permissions";
-
 type RouteContext = {
   params: Promise<{ projectId: string }>;
 };
@@ -52,12 +53,17 @@ export async function GET(
       existingProject.workspaceId
     );
 
-    if (!role) {
-      return NextResponse.json(
-        { message: "You do not have access to this project." },
-        { status: 403 }
-      );
-    }
+   const isMember = await isProjectMember(
+  session.user.id,
+  projectId
+);
+
+if (!canAccessProject(role, isMember)) {
+  return NextResponse.json(
+    { message: "You do not have access to this project." },
+    { status: 403 }
+  );
+}
 
     // 5. Fetch project details and members
     const [project, taskGroups] = await Promise.all([

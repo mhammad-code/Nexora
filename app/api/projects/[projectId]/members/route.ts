@@ -1,12 +1,14 @@
-import {
-  getWorkspaceRole,
-  canManageMembers,
-} from "@/lib/permissions";
+
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
+import {
+  getWorkspaceRole,
+  canManageMembers,
+  isProjectMember,
+  canAccessProject,
+} from "@/lib/permissions";
 
 type RouteContext = {
   params: Promise<{ projectId: string }>;
@@ -53,14 +55,17 @@ export async function GET(
       session.user.id,
       project.workspaceId
     );
+   const isMember = await isProjectMember(
+  session.user.id,
+  projectId
+);
 
-    if (!role) {
-      return NextResponse.json(
-        { message: "You are not a member of this workspace." },
-        { status: 403 }
-      );
-    }
-
+if (!canAccessProject(role, isMember)) {
+  return NextResponse.json(
+    { message: "You do not have access to this project." },
+    { status: 403 }
+  );
+}
     // 5. Retrieve project members
     const members = await prisma.projectMember.findMany({
       where: { projectId },
