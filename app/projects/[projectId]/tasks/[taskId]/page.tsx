@@ -2,9 +2,30 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
+import SubtaskForm from "@/features/tasks/components/subtask-form";
+
+type RelatedTask = {
+  id: string;
+  key: string | null;
+  title: string;
+  status: string;
+  priority: string;
+};
+
+type Subtask = RelatedTask & {
+  dueDate: string | null;
+  createdAt: string;
+  assignee: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+};
 
 type Task = {
   id: string;
+  key: string | null;
   title: string;
   description: string | null;
   status: string;
@@ -18,23 +39,42 @@ type Task = {
     name: string;
     email: string;
   };
+  parent: RelatedTask | null;
+  subtasks: Subtask[];
 };
 
 const statuses = ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE"];
 
 const priorities = [
-  { value: "LOW", description: "Minor importance", color: "border-slate-300 bg-slate-50 text-slate-700" },
-  { value: "MEDIUM", description: "Normal importance", color: "border-blue-300 bg-blue-50 text-blue-700" },
-  { value: "HIGH", description: "High importance", color: "border-orange-300 bg-orange-50 text-orange-700" },
-  { value: "URGENT", description: "Needs immediate attention", color: "border-red-300 bg-red-50 text-red-700" },
+  {
+    value: "LOW",
+    description: "Minor importance",
+    color: "border-slate-300 bg-slate-50 text-slate-700",
+  },
+  {
+    value: "MEDIUM",
+    description: "Normal importance",
+    color: "border-blue-300 bg-blue-50 text-blue-700",
+  },
+  {
+    value: "HIGH",
+    description: "High importance",
+    color: "border-orange-300 bg-orange-50 text-orange-700",
+  },
+  {
+    value: "URGENT",
+    description: "Needs immediate attention",
+    color: "border-red-300 bg-red-50 text-red-700",
+  },
 ];
 
 export default function TaskDetailPage({
   params,
 }: {
-  params: Promise<{ taskId: string }>;
+  params: Promise<{ projectId: string; taskId: string }>;
 }) {
   const [task, setTask] = useState<Task | null>(null);
+  const [projectId, setProjectId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isEditing, setIsEditing] = useState(false);
@@ -44,29 +84,47 @@ export default function TaskDetailPage({
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadTask() {
       try {
-        const { taskId } = await params;
+        const route = await params;
+
+        if (cancelled) return;
+
+        setProjectId(route.projectId);
+
         const response = await fetch(
-          `/api/tasks/${encodeURIComponent(taskId)}`
+          `/api/tasks/${encodeURIComponent(route.taskId)}`
         );
+
         const data = await response.json();
 
         if (!response.ok) {
           throw new Error(data.message || "Unable to load task.");
         }
 
-        setTask(data.task);
+        if (!cancelled) {
+          setTask(data.task);
+        }
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Something went wrong."
-        );
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Something went wrong."
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
     loadTask();
+
+    return () => {
+      cancelled = true;
+    };
   }, [params]);
 
   function startEditing() {
@@ -142,7 +200,9 @@ export default function TaskDetailPage({
     return <p className="p-6 text-red-600">{error}</p>;
   }
 
-  if (!task) return <p className="p-6">Task not found.</p>;
+  if (!task) {
+    return <p className="p-6">Task not found.</p>;
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-8">
@@ -154,9 +214,17 @@ export default function TaskDetailPage({
             <p className="text-sm font-medium text-blue-600">
               Nexora / Task Management
             </p>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
+
+            {task.key && (
+              <p className="mt-2 text-sm font-semibold text-slate-500">
+                {task.key}
+              </p>
+            )}
+
+            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
               {task.title}
             </h1>
+
             <p className="mt-2 text-sm text-slate-500">
               View and manage your task details.
             </p>
@@ -167,7 +235,6 @@ export default function TaskDetailPage({
             onClick={startEditing}
             className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
           >
-            <span className="mr-2">✎</span>
             Edit Task
           </button>
         </div>
@@ -179,10 +246,12 @@ export default function TaskDetailPage({
           </div>
         )}
 
-        {/* Task Details */}
+        {/* Task Overview */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-6 py-5">
-            <h2 className="font-semibold text-slate-900">Task Overview</h2>
+            <h2 className="font-semibold text-slate-900">
+              Task Overview
+            </h2>
             <p className="mt-1 text-sm text-slate-500">
               General information about this task.
             </p>
@@ -193,6 +262,7 @@ export default function TaskDetailPage({
               <h3 className="text-sm font-semibold text-slate-800">
                 Description
               </h3>
+
               <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-600">
                 {task.description || "No description provided."}
               </p>
@@ -224,6 +294,7 @@ export default function TaskDetailPage({
                 <p className="mt-2 text-sm font-medium text-slate-800">
                   {task.assignee?.name || "Unassigned"}
                 </p>
+
                 {task.assignee?.email && (
                   <p className="mt-1 text-xs text-slate-500">
                     {task.assignee.email}
@@ -256,6 +327,107 @@ export default function TaskDetailPage({
             </div>
           </div>
         </section>
+
+        {/* Parent Task */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="font-semibold text-slate-900">
+            Parent Task
+          </h2>
+
+          <p className="mt-1 text-sm text-slate-500">
+            The task this subtask belongs to.
+          </p>
+
+          {task.parent ? (
+            <Link
+              href={`/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(task.parent.id)}`}
+              className="mt-4 block rounded-xl border border-slate-200 p-4 transition hover:border-blue-300 hover:bg-blue-50"
+            >
+              <p className="text-xs font-semibold text-blue-600">
+                {task.parent.key || "Parent Task"}
+              </p>
+
+              <p className="mt-2 font-semibold text-slate-900">
+                {task.parent.title}
+              </p>
+
+              <p className="mt-2 text-xs text-slate-500">
+                {task.parent.status.replace("_", " ")} · {task.parent.priority}
+              </p>
+            </Link>
+          ) : (
+            <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
+              This task does not have a parent task.
+            </p>
+          )}
+        </section>
+
+        {/* Subtasks */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-slate-900">
+                Subtasks
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Smaller tasks associated with this task.
+              </p>
+            </div>
+
+            <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
+              {task.subtasks.length}
+            </span>
+          </div>
+
+          {/* Reusable Subtask Form */}
+          <SubtaskForm
+            projectId={projectId}
+            parentId={task.id}
+          />
+
+          {/* Subtask List */}
+          {task.subtasks.length > 0 ? (
+            <div className="mt-5 divide-y divide-slate-100">
+              {task.subtasks.map((subtask) => (
+                <Link
+                  key={subtask.id}
+                  href={`/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(subtask.id)}`}
+                  className="block rounded-lg px-3 py-4 transition hover:bg-slate-50"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-blue-600">
+                        {subtask.key || "Subtask"}
+                      </p>
+
+                      <p className="mt-1 font-medium text-slate-900">
+                        {subtask.title}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        Assignee: {subtask.assignee?.name || "Unassigned"}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs font-semibold text-slate-600">
+                        {subtask.status.replace("_", " ")}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        {subtask.priority}
+                      </p>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
+              No subtasks have been created yet.
+            </p>
+          )}
+        </section>
       </div>
 
       {/* Edit Task Modal */}
@@ -269,8 +441,6 @@ export default function TaskDetailPage({
           }}
         >
           <div className="my-auto w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
-
-            {/* Modal Header */}
             <div className="border-b border-slate-100 px-6 py-5">
               <div className="flex items-start justify-between">
                 <div>
@@ -294,10 +464,8 @@ export default function TaskDetailPage({
               </div>
             </div>
 
-            {/* Modal Form */}
             <form onSubmit={handleSave}>
               <div className="space-y-6 px-6 py-6">
-
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-slate-700">
                     Task Status
@@ -314,10 +482,6 @@ export default function TaskDetailPage({
                       </option>
                     ))}
                   </select>
-
-                  <p className="mt-2 text-xs text-slate-400">
-                    Choose the current progress of your task.
-                  </p>
                 </div>
 
                 <div>
@@ -355,7 +519,6 @@ export default function TaskDetailPage({
                 )}
               </div>
 
-              {/* Modal Footer */}
               <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 bg-slate-50 px-6 py-4">
                 <button
                   type="button"
