@@ -1,0 +1,228 @@
+
+import { NextResponse } from "next/server";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import {
+  getWorkspaceRole,
+  isProjectMember,
+  canAccessProject,
+} from "@/lib/permissions";
+import {
+  TaskPriority,
+  TaskStatus,
+} from "@/lib/generated/prisma/enums";
+
+// POST: Create a task
+export async function POST(request: Request) {
+  try {
+    // 1. Authenticate the user
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    if (!session) {
+      return NextResponse.json(
+        { message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    // 2. Read and validate request body
+    let body: Record<string, unknown>;
+
+    try {
+      const parsed = await request.json();
+
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        return NextResponse.json(
+          { message: "Invalid request body." },
+          { status: 400 }
+        );
+      }
+
+      body = parsed as Record<string, unknown>;
+    } catch {
+      return NextResponse.json(
+        { message: "Invalid JSON request body." },
+        { status: 400 }
+      );
+    }
+
+    const errors: Record<string, string> = {};
+
+    const { projectId, title, description, status, priority, dueDate, assigneeId } = body;
+
+    if (typeof projectId !== "string" || !projectId.trim()) {
+      errors.projectId = "Project ID is required.";
+    }
+
+    if (typeof title !== "string" || !title.trim()) {
+      errors.title = "Task title is required.";
+    }
+
+    if (title && typeof title === "string" && title.trim().length > 200) {
+      errors.title = "Task title cannot exceed 200 characters.";
+    }
+
+    if (
+      description !== undefined &&
+      description !== null &&
+      typeof description !== "string"
+    ) {
+      errors.description = "Description must be a string.";
+    }
+
+    if (
+      typeof description === "string" &&
+      description.length > 5000
+    ) {
+      errors.description = "Description cannot exceed 5000 characters.";
+    }
+
+    if (
+      status !== undefined &&
+      !Object.values(TaskStatus).some((value) => value === status)
+    ) {
+      errors.status = "Invalid task status.";
+    }
+
+    if (
+      priority !== undefined &&
+      !Object.values(TaskPriority).some((value) => value === priority)
+    ) {
+      errors.priority = "Invalid task priority.";
+    }
+
+    if (
+      assigneeId !== undefined &&
+      assigneeId !== null &&
+      (typeof assigneeId !== "string" || !assigneeId.trim())
+    ) {
+      errors.assigneeId = "Invalid assignee ID.";
+    }
+
+    let parsedDueDate: Date | null = null;
+
+    if (dueDate !== undefined && dueDate !== null) {
+      if (
+        typeof dueDate !== "string" ||
+        !dueDate.trim() ||
+        Number.isNaN(Date.parse(dueDate))
+      ) {
+        errors.dueDate = "A valid due date is required.";
+      } else {
+        parsedDueDate = new Date(dueDate);
+      }
+    }
+
+    if (Object.keys(errors).length > 0) {
+      return NextResponse.json(
+        {
+          message: "Validation failed.",
+          errors,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 3. Check whether the project exists
+    const project = await prisma.project.findUnique({
+      where: {
+        id: projectId as string,
+      },
+      select: {
+        id: true,
+        workspaceId: true,
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { message: "Project not found." },
+        { status: 404 }
+      );
+    }
+
+    // 4. Check project access
+    const role = await getWorkspaceRole(
+      session.user.id,
+      project.workspaceId
+    );
+
+    const isMember = await isProjectMember(
+      session.user.id,
+      project.id
+    );
+
+    if (!canAccessProject(role, isMember)) {
+      return NextResponse.json(
+        { message: "You are not allowed to create tasks in this project." },
+        { status: 403 }
+      );
+    }
+
+    // 5. Verify that the assignee belongs to this project
+    if (typeof assigneeId === "string") {
+      const assigneeMembership = await prisma.projectMember.findUnique({
+        where: {
+          userId_projectId: {
+            userId: assigneeId,
+            projectId: project.id,
+          },
+        },
+      });
+
+      if (!assigneeMembership) {
+        return NextResponse.json(
+          {
+            message: "Assignee must be a member of this project.",
+            errors: {
+              assigneeId: "Selected user is not a project member.",
+            },
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 6. Create the task
+    const task = await prisma.task.create({
+      data: {
+        title: (title as string).trim(),
+        description:
+          typeof description === "string"
+            ? description.trim() || null
+            : null,
+        status:
+          (status as TaskStatus | undefined) ?? TaskStatus.TODO,
+        priority:
+          (priority as TaskPriority | undefined) ?? TaskPriority.MEDIUM,
+        dueDate: parsedDueDate,
+        projectId: project.id,
+        createdById: session.user.id,
+        assigneeId:
+          typeof assigneeId === "string" ? assigneeId : null,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        message: "Task created successfully.",
+        task,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("Task creation error:", error);
+
+    return NextResponse.json(
+      { message: "Something went wrong while creating the task." },
+      { status: 500 }
+    );
+  }
+}
