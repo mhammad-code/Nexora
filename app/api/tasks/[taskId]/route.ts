@@ -13,6 +13,88 @@ import {
   TaskStatus,
 } from "@/lib/generated/prisma/enums";
 
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  try {
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    if (!session) {
+      return NextResponse.json(
+        { message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const { taskId } = await params;
+
+    if (!taskId?.trim()) {
+      return NextResponse.json(
+        { message: "Task ID is required." },
+        { status: 400 }
+      );
+    }
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      include: {
+        assignee: {
+          select: { id: true, name: true, email: true },
+        },
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
+        project: {
+          select: { id: true, workspaceId: true },
+        },
+      },
+    });
+
+    if (!task) {
+      return NextResponse.json(
+        { message: "Task not found." },
+        { status: 404 }
+      );
+    }
+
+    const role = await getWorkspaceRole(
+      session.user.id,
+      task.project.workspaceId
+    );
+
+    const isMember = await isProjectMember(
+      session.user.id,
+      task.projectId
+    );
+
+    if (!canAccessProject(role, isMember)) {
+      return NextResponse.json(
+        { message: "You are not allowed to view this task." },
+        { status: 403 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        message: "Task retrieved successfully.",
+        task,
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("Task retrieval error:", error);
+
+    return NextResponse.json(
+      { message: "Something went wrong while retrieving the task." },
+      { status: 500 }
+    );
+  }
+}
+
+
 // PATCH: Update an existing task
 export async function PATCH(
   request: Request,

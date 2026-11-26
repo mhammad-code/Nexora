@@ -13,6 +13,113 @@ import {
   TaskStatus,
 } from "@/lib/generated/prisma/enums";
 
+// GET: Retrieve all tasks for a project
+export async function GET(request: Request) {
+  try {
+    // 1. Authenticate the user
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    if (!session) {
+      return NextResponse.json(
+        { message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    // 2. Get projectId from URL query parameters
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get("projectId");
+
+    if (!projectId || !projectId.trim()) {
+      return NextResponse.json(
+        { message: "Project ID is required." },
+        { status: 400 }
+      );
+    }
+
+    // 3. Check whether the project exists
+    const project = await prisma.project.findUnique({
+      where: {
+        id: projectId,
+      },
+      select: {
+        id: true,
+        workspaceId: true,
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { message: "Project not found." },
+        { status: 404 }
+      );
+    }
+
+    // 4. Check project access permissions
+    const role = await getWorkspaceRole(
+      session.user.id,
+      project.workspaceId
+    );
+
+    const isMember = await isProjectMember(
+      session.user.id,
+      project.id
+    );
+
+    if (!canAccessProject(role, isMember)) {
+      return NextResponse.json(
+        { message: "You are not allowed to view this project's tasks." },
+        { status: 403 }
+      );
+    }
+
+    // 5. Retrieve project tasks from PostgreSQL
+    const tasks = await prisma.task.findMany({
+      where: {
+        projectId: project.id,
+      },
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    // 6. Return tasks
+    return NextResponse.json(
+      {
+        message: "Tasks retrieved successfully.",
+        total: tasks.length,
+        tasks,
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("Task retrieval error:", error);
+
+    return NextResponse.json(
+      { message: "Something went wrong while retrieving tasks." },
+      { status: 500 }
+    );
+  }
+}
+
 // POST: Create a task
 export async function POST(request: Request) {
   try {
