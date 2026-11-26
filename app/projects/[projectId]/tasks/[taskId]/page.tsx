@@ -3,6 +3,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import SubtaskForm from "@/features/tasks/components/subtask-form";
 
 type RelatedTask = {
@@ -73,6 +74,8 @@ export default function TaskDetailPage({
 }: {
   params: Promise<{ projectId: string; taskId: string }>;
 }) {
+  const router = useRouter();
+
   const [task, setTask] = useState<Task | null>(null);
   const [projectId, setProjectId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -82,6 +85,10 @@ export default function TaskDetailPage({
   const [priority, setPriority] = useState("");
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState("");
+
+  const [showArchiveConfirmation, setShowArchiveConfirmation] =
+    useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,6 +195,42 @@ export default function TaskDetailPage({
     }
   }
 
+  async function handleArchive() {
+    if (!task || archiving) return;
+
+    setArchiving(true);
+    setError("");
+
+    try {
+      const { taskId } = await params;
+
+      const response = await fetch(
+        `/api/tasks/${encodeURIComponent(taskId)}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Unable to archive task.");
+      }
+
+      // Redirect to the Kanban task list, not the Add Task page.
+      router.push(
+        `/projects/${encodeURIComponent(projectId)}/tasks/list`
+      );
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Something went wrong."
+      );
+      setArchiving(false);
+      setShowArchiveConfirmation(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 p-8">
@@ -207,7 +250,6 @@ export default function TaskDetailPage({
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-8">
       <div className="mx-auto max-w-5xl space-y-6">
-
         {/* Page Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -230,19 +272,40 @@ export default function TaskDetailPage({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={startEditing}
-            className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-          >
-            Edit Task
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={startEditing}
+              className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            >
+              Edit Task
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setError("");
+                setShowArchiveConfirmation(true);
+              }}
+              disabled={archiving}
+              className="rounded-lg border border-red-200 bg-white px-5 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+            >
+              Archive Task
+            </button>
+          </div>
         </div>
 
         {/* Success Message */}
         {success && (
           <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
             {success}
+          </div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
           </div>
         )}
 
@@ -379,13 +442,11 @@ export default function TaskDetailPage({
             </span>
           </div>
 
-          {/* Reusable Subtask Form */}
           <SubtaskForm
             projectId={projectId}
             parentId={task.id}
           />
 
-          {/* Subtask List */}
           {task.subtasks.length > 0 ? (
             <div className="mt-5 divide-y divide-slate-100">
               {task.subtasks.map((subtask) => (
@@ -538,6 +599,56 @@ export default function TaskDetailPage({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Archive Confirmation Dialog */}
+      {showArchiveConfirmation && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="archive-title"
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-xl text-red-600">
+              !
+            </div>
+
+            <h2
+              id="archive-title"
+              className="mt-4 text-xl font-bold text-slate-900"
+            >
+              Archive this task?
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Are you sure you want to archive{" "}
+              <strong>{task.title}</strong>? It will disappear from the
+              active task board, but its data will remain محفوظ in the
+              database.
+            </p>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={archiving}
+                onClick={() => setShowArchiveConfirmation(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={archiving}
+                onClick={handleArchive}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {archiving ? "Archiving..." : "Yes, Archive Task"}
+              </button>
+            </div>
           </div>
         </div>
       )}

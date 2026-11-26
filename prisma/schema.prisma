@@ -142,6 +142,9 @@ model Task {
   @@index([projectId])
   @@index([assigneeId])
   @@index([parentId])
+  archivedAt DateTime?
+
+  @@index([archivedAt])
 }
 
 model Session {
