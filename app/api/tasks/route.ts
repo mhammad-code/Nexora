@@ -13,9 +13,10 @@ import {
   TaskStatus,
 } from "@/lib/generated/prisma/enums";
 
-// GET: Retrieve all tasks for a project
+// ============================================
+// GET: Retrieve filtered and paginated tasks
+// ============================================
 
-// GET: Retrieve filtered and paginated tasks for a project
 export async function GET(request: Request) {
   try {
     // 1. Authenticate user
@@ -106,7 +107,10 @@ export async function GET(request: Request) {
       limit > 100
     ) {
       return NextResponse.json(
-        { message: "Invalid pagination values. Limit must be between 1 and 100." },
+        {
+          message:
+            "Invalid pagination values. Limit must be between 1 and 100.",
+        },
         { status: 400 }
       );
     }
@@ -198,7 +202,9 @@ export async function GET(request: Request) {
 
       if (!membership) {
         return NextResponse.json(
-          { message: "Selected assignee is not a project member." },
+          {
+            message: "Selected assignee is not a project member.",
+          },
           { status: 400 }
         );
       }
@@ -365,11 +371,13 @@ export async function GET(request: Request) {
   }
 }
 
+// ============================================
+// POST: Create a task with an automatic key
+// ============================================
 
-// POST: Create a task
 export async function POST(request: Request) {
   try {
-    // 1. Authenticate the user
+    // 1. Authenticate user
     const session = await auth.api.getSession({
       headers: await headers(),
     });
@@ -406,9 +414,18 @@ export async function POST(request: Request) {
       );
     }
 
-    const errors: Record<string, string> = {};
+    const {
+      projectId,
+      title,
+      description,
+      status,
+      priority,
+      dueDate,
+      assigneeId,
+    } = body;
 
-    const { projectId, title, description, status, priority, dueDate, assigneeId } = body;
+    // 3. Validate fields
+    const errors: Record<string, string> = {};
 
     if (typeof projectId !== "string" || !projectId.trim()) {
       errors.projectId = "Project ID is required.";
@@ -418,7 +435,10 @@ export async function POST(request: Request) {
       errors.title = "Task title is required.";
     }
 
-    if (title && typeof title === "string" && title.trim().length > 200) {
+    if (
+      typeof title === "string" &&
+      title.trim().length > 200
+    ) {
       errors.title = "Task title cannot exceed 200 characters.";
     }
 
@@ -434,7 +454,8 @@ export async function POST(request: Request) {
       typeof description === "string" &&
       description.length > 5000
     ) {
-      errors.description = "Description cannot exceed 5000 characters.";
+      errors.description =
+        "Description cannot exceed 5000 characters.";
     }
 
     if (
@@ -483,7 +504,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 3. Check whether the project exists
+    // 4. Find project
     const project = await prisma.project.findUnique({
       where: {
         id: projectId as string,
@@ -501,7 +522,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 4. Check project access
+    // 5. Check project permissions
     const role = await getWorkspaceRole(
       session.user.id,
       project.workspaceId
@@ -514,12 +535,14 @@ export async function POST(request: Request) {
 
     if (!canAccessProject(role, isMember)) {
       return NextResponse.json(
-        { message: "You are not allowed to create tasks in this project." },
+        {
+          message: "You are not allowed to create tasks in this project.",
+        },
         { status: 403 }
       );
     }
 
-    // 5. Verify that the assignee belongs to this project
+    // 6. Verify assignee belongs to this project
     if (typeof assigneeId === "string") {
       const assigneeMembership = await prisma.projectMember.findUnique({
         where: {
@@ -543,26 +566,53 @@ export async function POST(request: Request) {
       }
     }
 
-    // 6. Create the task
-    const task = await prisma.task.create({
-      data: {
-        title: (title as string).trim(),
-        description:
-          typeof description === "string"
-            ? description.trim() || null
-            : null,
-        status:
-          (status as TaskStatus | undefined) ?? TaskStatus.TODO,
-        priority:
-          (priority as TaskPriority | undefined) ?? TaskPriority.MEDIUM,
-        dueDate: parsedDueDate,
-        projectId: project.id,
-        createdById: session.user.id,
-        assigneeId:
-          typeof assigneeId === "string" ? assigneeId : null,
-      },
+    // 7. Generate task key and create task atomically
+    const task = await prisma.$transaction(async (tx) => {
+      // Atomically increment the project's task counter
+      const updatedProject = await tx.project.update({
+        where: {
+          id: project.id,
+        },
+        data: {
+          nextTaskNumber: {
+            increment: 1,
+          },
+        },
+        select: {
+          key: true,
+          nextTaskNumber: true,
+        },
+      });
+
+      // Reserve the number generated by the counter
+      const taskNumber = updatedProject.nextTaskNumber - 1;
+
+      // Generate key, for example: NEX-1
+      const generatedKey = `${updatedProject.key}-${taskNumber}`;
+
+      // Create task with its generated key
+      return tx.task.create({
+        data: {
+          key: generatedKey,
+          title: (title as string).trim(),
+          description:
+            typeof description === "string"
+              ? description.trim() || null
+              : null,
+          status:
+            (status as TaskStatus | undefined) ?? TaskStatus.TODO,
+          priority:
+            (priority as TaskPriority | undefined) ?? TaskPriority.MEDIUM,
+          dueDate: parsedDueDate,
+          projectId: project.id,
+          createdById: session.user.id,
+          assigneeId:
+            typeof assigneeId === "string" ? assigneeId : null,
+        },
+      });
     });
 
+    // 8. Return created task
     return NextResponse.json(
       {
         message: "Task created successfully.",
@@ -574,7 +624,9 @@ export async function POST(request: Request) {
     console.error("Task creation error:", error);
 
     return NextResponse.json(
-      { message: "Something went wrong while creating the task." },
+      {
+        message: "Something went wrong while creating the task.",
+      },
       { status: 500 }
     );
   }

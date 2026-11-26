@@ -74,14 +74,16 @@ model WorkspaceMember {
   @@unique([userId, workspaceId])
 }
 
+
 model Project {
-  id          String        @id @default(cuid())
-  name        String
-  key         String
-  description String?
-  status      ProjectStatus @default(PLANNING)
-  startDate   DateTime?
-  dueDate     DateTime?
+  id             String        @id @default(cuid())
+  name           String
+  key            String
+  nextTaskNumber Int           @default(1)
+  description    String?
+  status         ProjectStatus @default(PLANNING)
+  startDate      DateTime?
+  dueDate        DateTime?
 
   workspaceId String
   createdById String
@@ -97,6 +99,7 @@ model Project {
   @@unique([workspaceId, name])
   @@unique([workspaceId, key])
 }
+
 
 model ProjectMember {
   id        String   @id @default(cuid())
