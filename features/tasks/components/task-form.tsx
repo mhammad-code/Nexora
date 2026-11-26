@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 type TaskStatus = "TODO" | "IN_PROGRESS" | "IN_REVIEW" | "DONE";
 type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -13,6 +13,15 @@ type Task = {
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: string | null;
+  assigneeId?: string | null;
+};
+
+type ProjectMember = {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
 };
 
 type TaskFormProps = {
@@ -34,9 +43,59 @@ export default function TaskForm({ projectId, task }: TaskFormProps) {
     task?.dueDate ? task.dueDate.slice(0, 10) : ""
   );
 
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [assigneeId, setAssigneeId] = useState(task?.assigneeId ?? "");
+  const [membersLoading, setMembersLoading] = useState(true);
+  const [membersError, setMembersError] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
+
+  // Fetch project members.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchMembers() {
+      try {
+        const response = await fetch(
+          `/api/projects/${projectId}/members`
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.message || "Unable to load project members."
+          );
+        }
+
+        if (!cancelled) {
+          setMembers(data.members ?? []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMembersError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load project members."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setMembersLoading(false);
+        }
+      }
+    }
+
+    if (projectId?.trim()) {
+      fetchMembers();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,7 +105,9 @@ export default function TaskForm({ projectId, task }: TaskFormProps) {
     const taskId = task?.id;
 
     if (!taskId && !projectId?.trim()) {
-      setMessage("Project ID is missing. Please open this form from a project.");
+      setMessage(
+        "Project ID is missing. Please open this form from a project."
+      );
       setSuccess(false);
       return;
     }
@@ -76,6 +137,7 @@ export default function TaskForm({ projectId, task }: TaskFormProps) {
             status,
             priority,
             dueDate: dueDate || null,
+            assigneeId: assigneeId || null,
           }),
         }
       );
@@ -100,6 +162,7 @@ export default function TaskForm({ projectId, task }: TaskFormProps) {
         setStatus("TODO");
         setPriority("MEDIUM");
         setDueDate("");
+        setAssigneeId("");
       }
     } catch {
       setMessage("Something went wrong. Please try again.");
@@ -302,13 +365,61 @@ export default function TaskForm({ projectId, task }: TaskFormProps) {
                 </div>
               </div>
 
+              <div>
+                <label
+                  htmlFor="assignee"
+                  className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500"
+                >
+                  Assignee
+                </label>
+
+                <select
+                  id="assignee"
+                  value={assigneeId}
+                  onChange={(e) => setAssigneeId(e.target.value)}
+                  disabled={membersLoading || !!membersError}
+                  className={fieldClass}
+                >
+                  <option value="">Unassigned</option>
+
+                  {members.map((member) => (
+                    <option
+                      key={member.user.id}
+                      value={member.user.id}
+                    >
+                      {member.user.name} ({member.user.email})
+                    </option>
+                  ))}
+                </select>
+
+                {membersLoading && (
+                  <p className="mt-2 text-xs text-slate-400">
+                    Loading project members...
+                  </p>
+                )}
+
+                {membersError && (
+                  <p className="mt-2 text-xs text-red-600">
+                    {membersError}
+                  </p>
+                )}
+
+                {!membersLoading &&
+                  !membersError &&
+                  members.length === 0 && (
+                    <p className="mt-2 text-xs text-slate-400">
+                      No project members found.
+                    </p>
+                  )}
+              </div>
+
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
                 <p className="text-xs font-semibold text-blue-800">
                   Keep your team aligned
                 </p>
                 <p className="mt-1 text-xs leading-5 text-blue-700">
-                  Set a clear status, priority and deadline to make work easier
-                  to track.
+                  Set a clear status, priority, assignee and deadline to make
+                  work easier to track.
                 </p>
               </div>
             </aside>
