@@ -229,6 +229,9 @@ export async function GET(request: Request) {
     const where = {
       projectId: project.id,
 
+      // Exclude archived tasks from active task lists
+      archivedAt: null,
+
       ...(status
         ? { status: status as TaskStatus }
         : {}),
@@ -588,13 +591,19 @@ export async function POST(request: Request) {
         select: {
           id: true,
           projectId: true,
+          archivedAt: true,
         },
       });
 
-      if (!parentTask || parentTask.projectId !== project.id) {
+      if (
+        !parentTask ||
+        parentTask.projectId !== project.id ||
+        parentTask.archivedAt !== null
+      ) {
         return NextResponse.json(
           {
-            message: "Parent task must belong to the same project.",
+            message:
+              "Parent task must be active and belong to the same project.",
             errors: {
               parentId: "Invalid parent task for this project.",
             },

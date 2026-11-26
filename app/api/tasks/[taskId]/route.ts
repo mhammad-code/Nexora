@@ -13,7 +13,7 @@ import {
   TaskStatus,
 } from "@/lib/generated/prisma/enums";
 
-// GET: Retrieve one task with its parent and subtasks
+// GET: Retrieve one active task with its parent and active subtasks
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ taskId: string }> }
@@ -39,8 +39,11 @@ export async function GET(
       );
     }
 
-    const task = await prisma.task.findUnique({
-      where: { id: taskId },
+    const task = await prisma.task.findFirst({
+      where: {
+        id: taskId,
+        archivedAt: null,
+      },
       include: {
         assignee: {
           select: {
@@ -69,9 +72,13 @@ export async function GET(
             title: true,
             status: true,
             priority: true,
+            archivedAt: true,
           },
         },
         subtasks: {
+          where: {
+            archivedAt: null,
+          },
           orderBy: {
             createdAt: "asc",
           },
@@ -138,7 +145,7 @@ export async function GET(
   }
 }
 
-// PATCH: Update an existing task
+// PATCH: Update an existing active task
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ taskId: string }> }
@@ -322,6 +329,7 @@ export async function PATCH(
       where: { id: taskId },
       select: {
         id: true,
+        archivedAt: true,
         project: {
           select: {
             id: true,
@@ -338,7 +346,15 @@ export async function PATCH(
       );
     }
 
-    // 6. Check project permissions
+    // 6. Prevent updates to archived tasks
+    if (existingTask.archivedAt) {
+      return NextResponse.json(
+        { message: "Archived tasks cannot be updated." },
+        { status: 409 }
+      );
+    }
+
+    // 7. Check project permissions
     const role = await getWorkspaceRole(
       session.user.id,
       existingTask.project.workspaceId
@@ -356,7 +372,7 @@ export async function PATCH(
       );
     }
 
-    // 7. Verify assignee belongs to this project
+    // 8. Verify assignee belongs to this project
     if (typeof assigneeId === "string") {
       const membership = await prisma.projectMember.findUnique({
         where: {
@@ -380,7 +396,7 @@ export async function PATCH(
       }
     }
 
-    // 8. Validate parent task and prevent circular relationships
+    // 9. Validate parent task and prevent circular relationships
     if (typeof parentId === "string") {
       if (parentId === taskId) {
         return NextResponse.json(
@@ -424,23 +440,40 @@ export async function PATCH(
 
         visited.add(currentParentId);
 
-        const parentTask = await prisma.task.findUnique({
-          where: {
-            id: currentParentId,
-          },
-          select: {
-            id: true,
-            projectId: true,
-            parentId: true,
-          },
-        });
-
+        const parentTask: {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  archivedAt: Date | null;
+} | null = await prisma.task.findUnique({
+  where: {
+    id: currentParentId,
+  },
+  select: {
+    id: true,
+    projectId: true,
+    parentId: true,
+    archivedAt: true,
+  },
+});
         if (!parentTask) {
           return NextResponse.json(
             {
               message: "Parent task not found.",
               errors: {
                 parentId: "The selected parent task does not exist.",
+              },
+            },
+            { status: 400 }
+          );
+        }
+
+        if (parentTask.archivedAt) {
+          return NextResponse.json(
+            {
+              message: "An archived task cannot be selected as a parent.",
+              errors: {
+                parentId: "The selected parent task is archived.",
               },
             },
             { status: 400 }
@@ -464,7 +497,7 @@ export async function PATCH(
       }
     }
 
-    // 9. Build update data
+    // 10. Build update data
     const data = {
       ...(title !== undefined
         ? { title: (title as string).trim() }
@@ -500,7 +533,7 @@ export async function PATCH(
         : {}),
     };
 
-    // 10. Update task
+    // 11. Update task
     const updatedTask = await prisma.task.update({
       where: { id: taskId },
       data,
@@ -519,6 +552,156 @@ export async function PATCH(
     return NextResponse.json(
       {
         message: "Something went wrong while updating the task.",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE: Archive a task and all its subtasks
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  try {
+    // 1. Authenticate user
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    if (!session) {
+      return NextResponse.json(
+        { message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    // 2. Get and validate task ID
+    const { taskId } = await params;
+
+    if (!taskId?.trim()) {
+      return NextResponse.json(
+        { message: "Task ID is required." },
+        { status: 400 }
+      );
+    }
+
+    // 3. Find task and its workspace
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        title: true,
+        archivedAt: true,
+        project: {
+          select: {
+            id: true,
+            workspaceId: true,
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return NextResponse.json(
+        { message: "Task not found." },
+        { status: 404 }
+      );
+    }
+
+    // 4. Check permissions
+    const role = await getWorkspaceRole(
+      session.user.id,
+      task.project.workspaceId
+    );
+
+    const isMember = await isProjectMember(
+      session.user.id,
+      task.project.id
+    );
+
+    if (!canAccessProject(role, isMember)) {
+      return NextResponse.json(
+        { message: "You are not allowed to archive this task." },
+        { status: 403 }
+      );
+    }
+
+    if (role !== "OWNER" && role !== "ADMIN") {
+      return NextResponse.json(
+        {
+          message: "Only workspace owners and admins can archive tasks.",
+        },
+        { status: 403 }
+      );
+    }
+
+    // 5. Prevent archiving an already archived task
+    if (task.archivedAt) {
+      return NextResponse.json(
+        { message: "This task is already archived." },
+        { status: 409 }
+      );
+    }
+
+    // 6. Find all subtasks recursively
+    const descendantIds: string[] = [];
+    let parentIds = [taskId];
+
+    while (parentIds.length > 0) {
+      const children = await prisma.task.findMany({
+        where: {
+          projectId: task.project.id,
+          parentId: { in: parentIds },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      const childIds = children.map((child) => child.id);
+
+      if (childIds.length === 0) {
+        break;
+      }
+
+      descendantIds.push(...childIds);
+      parentIds = childIds;
+    }
+
+    // 7. Archive parent and all descendants together
+    const archivedAt = new Date();
+
+    await prisma.$transaction([
+      prisma.task.update({
+        where: { id: taskId },
+        data: { archivedAt },
+      }),
+
+      prisma.task.updateMany({
+        where: {
+          id: { in: descendantIds },
+          archivedAt: null,
+        },
+        data: { archivedAt },
+      }),
+    ]);
+
+    return NextResponse.json(
+      {
+        message: "Task and its subtasks archived successfully.",
+        archivedTaskId: taskId,
+        archivedSubtasksCount: descendantIds.length,
+        archivedAt,
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("Task archive error:", error);
+
+    return NextResponse.json(
+      {
+        message: "Something went wrong while archiving the task.",
       },
       { status: 500 }
     );
