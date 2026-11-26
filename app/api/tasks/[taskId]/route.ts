@@ -13,6 +13,7 @@ import {
   TaskStatus,
 } from "@/lib/generated/prisma/enums";
 
+// GET: Retrieve one task with its parent and subtasks
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ taskId: string }> }
@@ -42,13 +43,54 @@ export async function GET(
       where: { id: taskId },
       include: {
         assignee: {
-          select: { id: true, name: true, email: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
         },
         createdBy: {
-          select: { id: true, name: true, email: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
         },
         project: {
-          select: { id: true, workspaceId: true },
+          select: {
+            id: true,
+            workspaceId: true,
+          },
+        },
+        parent: {
+          select: {
+            id: true,
+            key: true,
+            title: true,
+            status: true,
+            priority: true,
+          },
+        },
+        subtasks: {
+          orderBy: {
+            createdAt: "asc",
+          },
+          select: {
+            id: true,
+            key: true,
+            title: true,
+            status: true,
+            priority: true,
+            dueDate: true,
+            createdAt: true,
+            assignee: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
         },
       },
     });
@@ -88,12 +130,13 @@ export async function GET(
     console.error("Task retrieval error:", error);
 
     return NextResponse.json(
-      { message: "Something went wrong while retrieving the task." },
+      {
+        message: "Something went wrong while retrieving the task.",
+      },
       { status: 500 }
     );
   }
 }
-
 
 // PATCH: Update an existing task
 export async function PATCH(
@@ -101,7 +144,7 @@ export async function PATCH(
   { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
-    // 1. Authenticate the user
+    // 1. Authenticate user
     const session = await auth.api.getSession({
       headers: await headers(),
     });
@@ -126,7 +169,7 @@ export async function PATCH(
     let body: Record<string, unknown>;
 
     try {
-      const parsed = await request.json();
+      const parsed: unknown = await request.json();
 
       if (
         typeof parsed !== "object" ||
@@ -147,7 +190,7 @@ export async function PATCH(
       );
     }
 
-    // 3. Allow only editable fields
+    // 3. Allow only supported fields
     const allowedFields = [
       "title",
       "description",
@@ -155,6 +198,7 @@ export async function PATCH(
       "priority",
       "dueDate",
       "assigneeId",
+      "parentId",
     ];
 
     const unknownFields = Object.keys(body).filter(
@@ -193,6 +237,7 @@ export async function PATCH(
       priority,
       dueDate,
       assigneeId,
+      parentId,
     } = body;
 
     if (title !== undefined) {
@@ -240,6 +285,14 @@ export async function PATCH(
       errors.assigneeId = "Invalid assignee ID.";
     }
 
+    if (
+      parentId !== undefined &&
+      parentId !== null &&
+      (typeof parentId !== "string" || !parentId.trim())
+    ) {
+      errors.parentId = "Invalid parent task ID.";
+    }
+
     let parsedDueDate: Date | null = null;
 
     if (dueDate !== undefined && dueDate !== null) {
@@ -264,7 +317,7 @@ export async function PATCH(
       );
     }
 
-    // 5. Find the task and its project
+    // 5. Find existing task and project
     const existingTask = await prisma.task.findUnique({
       where: { id: taskId },
       select: {
@@ -285,7 +338,7 @@ export async function PATCH(
       );
     }
 
-    // 6. Check project access
+    // 6. Check project permissions
     const role = await getWorkspaceRole(
       session.user.id,
       existingTask.project.workspaceId
@@ -303,7 +356,7 @@ export async function PATCH(
       );
     }
 
-    // 7. Verify the new assignee belongs to this project
+    // 7. Verify assignee belongs to this project
     if (typeof assigneeId === "string") {
       const membership = await prisma.projectMember.findUnique({
         where: {
@@ -327,7 +380,91 @@ export async function PATCH(
       }
     }
 
-    // 8. Update only the supplied fields
+    // 8. Validate parent task and prevent circular relationships
+    if (typeof parentId === "string") {
+      if (parentId === taskId) {
+        return NextResponse.json(
+          {
+            message: "A task cannot be its own parent.",
+            errors: {
+              parentId: "A task cannot be its own parent.",
+            },
+          },
+          { status: 400 }
+        );
+      }
+
+      let currentParentId: string | null = parentId;
+      const visited = new Set<string>();
+
+      while (currentParentId !== null) {
+        if (currentParentId === taskId) {
+          return NextResponse.json(
+            {
+              message:
+                "This parent relationship would create a circular relationship.",
+              errors: {
+                parentId:
+                  "Circular parent-child relationships are not allowed.",
+              },
+            },
+            { status: 400 }
+          );
+        }
+
+        if (visited.has(currentParentId)) {
+          return NextResponse.json(
+            {
+              message:
+                "The proposed parent hierarchy contains a circular relationship.",
+            },
+            { status: 400 }
+          );
+        }
+
+        visited.add(currentParentId);
+
+        const parentTask = await prisma.task.findUnique({
+          where: {
+            id: currentParentId,
+          },
+          select: {
+            id: true,
+            projectId: true,
+            parentId: true,
+          },
+        });
+
+        if (!parentTask) {
+          return NextResponse.json(
+            {
+              message: "Parent task not found.",
+              errors: {
+                parentId: "The selected parent task does not exist.",
+              },
+            },
+            { status: 400 }
+          );
+        }
+
+        if (parentTask.projectId !== existingTask.project.id) {
+          return NextResponse.json(
+            {
+              message: "Parent task must belong to the same project.",
+              errors: {
+                parentId:
+                  "Cross-project parent relationships are not allowed.",
+              },
+            },
+            { status: 400 }
+          );
+        }
+
+        currentParentId = parentTask.parentId;
+      }
+    }
+
+    // 9. Build update data
     const data = {
       ...(title !== undefined
         ? { title: (title as string).trim() }
@@ -355,8 +492,15 @@ export async function PATCH(
               typeof assigneeId === "string" ? assigneeId : null,
           }
         : {}),
+      ...(parentId !== undefined
+        ? {
+            parentId:
+              typeof parentId === "string" ? parentId : null,
+          }
+        : {}),
     };
 
+    // 10. Update task
     const updatedTask = await prisma.task.update({
       where: { id: taskId },
       data,
@@ -373,7 +517,9 @@ export async function PATCH(
     console.error("Task update error:", error);
 
     return NextResponse.json(
-      { message: "Something went wrong while updating the task." },
+      {
+        message: "Something went wrong while updating the task.",
+      },
       { status: 500 }
     );
   }
