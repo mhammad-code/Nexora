@@ -14,9 +14,11 @@ import {
 } from "@/lib/generated/prisma/enums";
 
 // GET: Retrieve all tasks for a project
+
+// GET: Retrieve filtered and paginated tasks for a project
 export async function GET(request: Request) {
   try {
-    // 1. Authenticate the user
+    // 1. Authenticate user
     const session = await auth.api.getSession({
       headers: await headers(),
     });
@@ -28,18 +30,124 @@ export async function GET(request: Request) {
       );
     }
 
-    // 2. Get projectId from URL query parameters
+    // 2. Read query parameters
     const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get("projectId");
 
-    if (!projectId || !projectId.trim()) {
+    const projectId = searchParams.get("projectId");
+    const search = searchParams.get("search")?.trim() ?? "";
+    const status = searchParams.get("status");
+    const priority = searchParams.get("priority");
+    const assigneeId = searchParams.get("assigneeId");
+    const dueDateFilter = searchParams.get("dueDate");
+
+    const pageValue = searchParams.get("page") ?? "1";
+    const limitValue = searchParams.get("limit") ?? "10";
+
+    const sortBy = searchParams.get("sortBy") ?? "createdAt";
+    const sortOrder = searchParams.get("sortOrder") ?? "desc";
+
+    // 3. Validate project ID
+    if (!projectId?.trim()) {
       return NextResponse.json(
         { message: "Project ID is required." },
         { status: 400 }
       );
     }
 
-    // 3. Check whether the project exists
+    // 4. Validate status
+    if (
+      status &&
+      !Object.values(TaskStatus).some((value) => value === status)
+    ) {
+      return NextResponse.json(
+        { message: "Invalid task status filter." },
+        { status: 400 }
+      );
+    }
+
+    // 5. Validate priority
+    if (
+      priority &&
+      !Object.values(TaskPriority).some((value) => value === priority)
+    ) {
+      return NextResponse.json(
+        { message: "Invalid task priority filter." },
+        { status: 400 }
+      );
+    }
+
+    // 6. Validate search
+    if (search.length > 100) {
+      return NextResponse.json(
+        { message: "Search cannot exceed 100 characters." },
+        { status: 400 }
+      );
+    }
+
+    // 7. Validate pagination
+    if (
+      !/^\d+$/.test(pageValue) ||
+      !/^\d+$/.test(limitValue)
+    ) {
+      return NextResponse.json(
+        { message: "Page and limit must be positive integers." },
+        { status: 400 }
+      );
+    }
+
+    const page = Number(pageValue);
+    const limit = Number(limitValue);
+
+    if (
+      !Number.isSafeInteger(page) ||
+      !Number.isSafeInteger(limit) ||
+      page < 1 ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      return NextResponse.json(
+        { message: "Invalid pagination values. Limit must be between 1 and 100." },
+        { status: 400 }
+      );
+    }
+
+    // 8. Validate sorting
+    const allowedSortFields = [
+      "title",
+      "priority",
+      "dueDate",
+      "createdAt",
+    ];
+
+    if (
+      !allowedSortFields.includes(sortBy) ||
+      !["asc", "desc"].includes(sortOrder)
+    ) {
+      return NextResponse.json(
+        { message: "Invalid sorting parameters." },
+        { status: 400 }
+      );
+    }
+
+    // 9. Validate due-date filter
+    const allowedDueDateFilters = [
+      "OVERDUE",
+      "TODAY",
+      "UPCOMING",
+      "NO_DATE",
+    ];
+
+    if (
+      dueDateFilter &&
+      !allowedDueDateFilters.includes(dueDateFilter)
+    ) {
+      return NextResponse.json(
+        { message: "Invalid due-date filter." },
+        { status: 400 }
+      );
+    }
+
+    // 10. Find project
     const project = await prisma.project.findUnique({
       where: {
         id: projectId,
@@ -57,7 +165,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // 4. Check project access permissions
+    // 11. Check project access
     const role = await getWorkspaceRole(
       session.user.id,
       project.workspaceId
@@ -70,43 +178,178 @@ export async function GET(request: Request) {
 
     if (!canAccessProject(role, isMember)) {
       return NextResponse.json(
-        { message: "You are not allowed to view this project's tasks." },
+        {
+          message: "You are not allowed to view this project's tasks.",
+        },
         { status: 403 }
       );
     }
 
-    // 5. Retrieve project tasks from PostgreSQL
-    const tasks = await prisma.task.findMany({
-      where: {
-        projectId: project.id,
-      },
-      include: {
-        assignee: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
+    // 12. Verify assignee belongs to this project
+    if (assigneeId) {
+      const membership = await prisma.projectMember.findUnique({
+        where: {
+          userId_projectId: {
+            userId: assigneeId,
+            projectId: project.id,
           },
         },
-        createdBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+      });
 
-    // 6. Return tasks
+      if (!membership) {
+        return NextResponse.json(
+          { message: "Selected assignee is not a project member." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 13. Prepare due-date boundaries (UTC)
+    const now = new Date();
+
+    const todayStart = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate()
+      )
+    );
+
+    const tomorrowStart = new Date(
+      todayStart.getTime() + 24 * 60 * 60 * 1000
+    );
+
+    // 14. Build database filters
+    const where = {
+      projectId: project.id,
+
+      ...(status
+        ? { status: status as TaskStatus }
+        : {}),
+
+      ...(priority
+        ? { priority: priority as TaskPriority }
+        : {}),
+
+      ...(assigneeId
+        ? { assigneeId }
+        : {}),
+
+      ...(search
+        ? {
+            OR: [
+              {
+                title: {
+                  contains: search,
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                key: {
+                  contains: search,
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          }
+        : {}),
+
+      ...(dueDateFilter === "OVERDUE"
+        ? {
+            dueDate: {
+              lt: todayStart,
+            },
+          }
+        : {}),
+
+      ...(dueDateFilter === "TODAY"
+        ? {
+            dueDate: {
+              gte: todayStart,
+              lt: tomorrowStart,
+            },
+          }
+        : {}),
+
+      ...(dueDateFilter === "UPCOMING"
+        ? {
+            dueDate: {
+              gte: tomorrowStart,
+            },
+          }
+        : {}),
+
+      ...(dueDateFilter === "NO_DATE"
+        ? {
+            dueDate: null,
+          }
+        : {}),
+    };
+
+    // 15. Prepare sorting
+    let orderBy;
+
+    switch (sortBy) {
+      case "title":
+        orderBy = { title: sortOrder as "asc" | "desc" };
+        break;
+
+      case "priority":
+        orderBy = { priority: sortOrder as "asc" | "desc" };
+        break;
+
+      case "dueDate":
+        orderBy = { dueDate: sortOrder as "asc" | "desc" };
+        break;
+
+      default:
+        orderBy = { createdAt: sortOrder as "asc" | "desc" };
+    }
+
+    // 16. Count matching tasks and retrieve current page
+    const [total, tasks] = await Promise.all([
+      prisma.task.count({
+        where,
+      }),
+
+      prisma.task.findMany({
+        where,
+        include: {
+          assignee: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          createdBy: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+        },
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    // 17. Return results
     return NextResponse.json(
       {
         message: "Tasks retrieved successfully.",
-        total: tasks.length,
+        total,
         tasks,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNextPage: page * limit < total,
+          hasPreviousPage: page > 1,
+        },
       },
       { status: 200 }
     );
@@ -114,11 +357,14 @@ export async function GET(request: Request) {
     console.error("Task retrieval error:", error);
 
     return NextResponse.json(
-      { message: "Something went wrong while retrieving tasks." },
+      {
+        message: "Something went wrong while retrieving tasks.",
+      },
       { status: 500 }
     );
   }
 }
+
 
 // POST: Create a task
 export async function POST(request: Request) {
